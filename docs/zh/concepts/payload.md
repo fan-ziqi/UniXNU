@@ -6,6 +6,22 @@
 
 启动参数保存在负载的 `EFI/UniXNU/unixnu.toml` 中。修改后运行 `./unixnu payload` 和 `./unixnu bootimg`，再启动新镜像。参数优先级和检查命令见[应用启动参数](/zh/xnu/boot-arguments#apply-arguments)。
 
+## 压缩 initrd 交付
+
+包含 `UniXNURamDiskDxe` UNIXFAT1 支持的固件可以接收压缩 FAT 卷，包括通过
+GKI 的 `vendor_boot` ramdisk 传入。运行
+`scripts/pack-uefi-ramdisk.py INPUT OUTPUT --compressor /path/to/TianoCompress`。
+脚本使用标准 UEFI 压缩，核对完整的主机解压还原结果，并记录输入、输出哈希。
+默认的 Tiano 压缩格式与它不同。
+
+64 字节小端头保存 `UNIXFAT1`、版本 1、头大小、压缩大小、展开大小与 CRC32。
+驱动将展开大小限制为 512 MiB，通过 `EFI_DECOMPRESS_PROTOCOL` 解压，检查大小
+和 CRC，再发布只读块设备。普通 FAT initrd 沿用原来的路径。压缩输入仍必须满足
+接收分区和加载地址窗口的边界，解压不会放宽这些限制。
+
+sheng 实机已将 v4 UEFI 写入 `boot_b`、压缩 FAT 写入 `vendor_boot_b`，通过普通
+重启显示压缩测试菜单。这只验证菜单发现，尚不代表 XNU 执行或断电冷启动通过。
+
 ## 卷布局
 
 ```

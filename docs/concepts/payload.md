@@ -6,6 +6,25 @@ For a Mu-Silicium initrd payload, embed `UniXNURamDiskDxe`, DiskIoDxe and the FA
 
 Boot arguments are stored in the payload's `EFI/UniXNU/unixnu.toml`. After changing them, run `./unixnu payload` and `./unixnu bootimg`, then boot the new image. See [apply boot arguments](/xnu/boot-arguments#apply-arguments) for precedence and inspection commands.
 
+## Compressed initrd delivery
+
+Firmware with `UniXNURamDiskDxe` UNIXFAT1 support can receive a compressed FAT
+volume, including through a GKI `vendor_boot` ramdisk. Run
+`scripts/pack-uefi-ramdisk.py INPUT OUTPUT --compressor /path/to/TianoCompress`.
+The script uses standard UEFI compression, verifies a full host round trip,
+and records the input and output hashes. The default Tiano codec is different.
+
+The 64-byte little-endian envelope contains `UNIXFAT1`, version 1, header size,
+stored size, expanded size and CRC32. The driver bounds the expanded volume at
+512 MiB, decompresses it through `EFI_DECOMPRESS_PROTOCOL`, checks its size and
+CRC, and publishes the result as a read-only block device. Plain FAT initrds
+retain the existing path. The compressed input must fit the receiving partition
+and its load-address window; decompression does not enlarge those limits.
+
+A sheng device displayed the compressed test menu after flashing v4 UEFI to
+`boot_b`, placing the compressed FAT in `vendor_boot_b`, and issuing a normal
+reboot. This verifies menu discovery, not XNU execution or a cold power cycle.
+
 ## Volume layout
 
 ```
