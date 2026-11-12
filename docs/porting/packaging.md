@@ -74,6 +74,17 @@ Run it in a fork of the device repository:
 3. Download the artifacts, then delete the run (`gh run delete`). The artifacts
    are boot images of one device and are not kept.
 
+### sheng macOS installation workflow
+
+The sheng fork's `macos-install.yml` prepares macOS 27 installation inputs on
+a macOS runner. It accepts the actual userdata LBA bounds and requires an
+explicit first-install selection before creating a missing Data seed. The job
+creates owner policies from unchanged profile-pinned system windows, verifies
+their signatures and block tables, and exports userdata, kernel, payload and
+the preserved seed with checksums. Firmware and boot-image assembly can use
+the existing local UEFI build. A successful job establishes a build result;
+device boot and persistent startup still require hardware verification.
+
 ## board.toml keys
 
 ```toml

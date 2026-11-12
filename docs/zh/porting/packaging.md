@@ -60,6 +60,15 @@ ipsw tap），并在构建前断言齐全。板级在 board.toml 的 `[firmware.
 3. 下载产物后删除该运行（`gh run delete`）。产物是一台设备的启动镜像，
    不保留。
 
+### sheng macOS 安装工作流
+
+sheng fork 的 `macos-install.yml` 在 macOS runner 上准备 macOS 27 安装输入。
+输入实际 userdata LBA 边界；只有显式选择首次安装时才创建缺失的 Data seed。
+工作流从与配置固定摘要一致的原始系统卷生成所有者签名策略，验证签名与块校验表，
+导出 userdata、内核、payload、原始 Data seed 及校验和。
+后续可用本机已构建的 UEFI 组装启动镜像。工作流通过仅代表构建通过，
+实机启动和持久启动仍需硬件验证。
+
 ## board.toml 键
 
 ```toml
