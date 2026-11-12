@@ -10,9 +10,11 @@
 #include <Library/DebugLib.h>
 #include <Library/FdtLib.h>
 #include <Library/HobLib.h>
+#include <Library/MemoryAllocationLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Protocol/BlockIo.h>
 #include <Protocol/DevicePath.h>
+#include <Protocol/Decompress.h>
 
 // Mu-Silicium SEC stores the incoming x0 value in this HOB as a UINT64.
 STATIC CONST EFI_GUID mEntryArgHobGuid = {
@@ -128,6 +130,102 @@ STATIC EFI_BLOCK_IO_PROTOCOL  mBlockIo = {
   RamBlockFlush
 };
 
+// UNIXFAT1 wraps the standard UEFI compression stream. It lets a payload
+// filesystem exceed the vendor_boot partition while keeping the compressed
+// input inside that partition. The ordinary, uncompressed initrd is unchanged.
+#define PACKED_HEADER_BYTES  64
+#define MAX_PACKED_OUTPUT    SIZE_512MB
+
+STATIC
+EFI_STATUS
+ExpandPackedInitrd (
+  IN OUT UINT64  *Start,
+  IN OUT UINT64  *End
+  )
+{
+  EFI_DECOMPRESS_PROTOCOL  *Decompress;
+  EFI_STATUS              Status;
+  UINT8                   *Header;
+  UINT8                   *Compressed;
+  UINT64                  StoredSize;
+  UINT64                  ExpandedSize;
+  UINT32                  DestinationSize;
+  UINT32                  ScratchSize;
+  UINT32                  Crc;
+  VOID                    *Destination;
+  VOID                    *Scratch;
+
+  if ((*End - *Start < 8) || (CompareMem ((VOID *)(UINTN)*Start, "UNIXFAT1", 8) != 0)) {
+    return EFI_SUCCESS;
+  }
+
+  Header = (UINT8 *)(UINTN)*Start;
+  if ((*End - *Start < PACKED_HEADER_BYTES) ||
+      (ReadUnaligned32 ((UINT32 *)(Header + 8)) != 1) ||
+      (ReadUnaligned32 ((UINT32 *)(Header + 12)) != PACKED_HEADER_BYTES))
+  {
+    return EFI_COMPROMISED_DATA;
+  }
+
+  StoredSize   = ReadUnaligned64 ((UINT64 *)(Header + 16));
+  ExpandedSize = ReadUnaligned64 ((UINT64 *)(Header + 24));
+  if ((StoredSize < 8) || (StoredSize > MAX_UINT32) ||
+      (StoredSize > *End - *Start - PACKED_HEADER_BYTES) ||
+      (ExpandedSize < RAM_BLOCK_SIZE) || (ExpandedSize > MAX_PACKED_OUTPUT) ||
+      ((ExpandedSize % RAM_BLOCK_SIZE) != 0))
+  {
+    return EFI_COMPROMISED_DATA;
+  }
+
+  Compressed = Header + PACKED_HEADER_BYTES;
+  if ((UINT64)ReadUnaligned32 ((UINT32 *)Compressed) + 8 != StoredSize) {
+    return EFI_COMPROMISED_DATA;
+  }
+
+  Status = gBS->LocateProtocol (&gEfiDecompressProtocolGuid, NULL, (VOID **)&Decompress);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Status = Decompress->GetInfo (Decompress, Compressed, (UINT32)StoredSize, &DestinationSize, &ScratchSize);
+  if (EFI_ERROR (Status) || (DestinationSize != ExpandedSize) || (ScratchSize > SIZE_1MB)) {
+    return EFI_COMPROMISED_DATA;
+  }
+
+  Destination = AllocatePages (EFI_SIZE_TO_PAGES (DestinationSize));
+  Scratch     = ScratchSize != 0 ? AllocatePool (ScratchSize) : NULL;
+  if ((Destination == NULL) || ((ScratchSize != 0) && (Scratch == NULL))) {
+    if (Destination != NULL) {
+      FreePages (Destination, EFI_SIZE_TO_PAGES (DestinationSize));
+    }
+    if (Scratch != NULL) {
+      FreePool (Scratch);
+    }
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  Status = Decompress->Decompress (Decompress, Compressed, (UINT32)StoredSize,
+                                   Destination, DestinationSize, Scratch, ScratchSize);
+  if (Scratch != NULL) {
+    FreePool (Scratch);
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = gBS->CalculateCrc32 (Destination, DestinationSize, &Crc);
+    if (!EFI_ERROR (Status) && (Crc != ReadUnaligned32 ((UINT32 *)(Header + 32)))) {
+      Status = EFI_CRC_ERROR;
+    }
+  }
+  if (EFI_ERROR (Status)) {
+    FreePages (Destination, EFI_SIZE_TO_PAGES (DestinationSize));
+    return Status;
+  }
+
+  DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: expanded %lu bytes to %u bytes, CRC verified\n", StoredSize, DestinationSize));
+  *Start = (UINT64)(UINTN)Destination;
+  *End   = *Start + DestinationSize;
+  return EFI_SUCCESS;
+}
+
 STATIC
 VOID
 PublishInitrd (
@@ -163,6 +261,12 @@ PublishInitrd (
   End   = ReadCells (EndProp, EndLength / 4);
   if (End <= Start) {
     DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: empty initrd 0x%lx-0x%lx\n", Start, End));
+    return;
+  }
+
+  Status = ExpandPackedInitrd (&Start, &End);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_ERROR, "UNIXNURAMDISK: packed initrd refused: %r\n", Status));
     return;
   }
 
