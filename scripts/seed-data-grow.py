@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +74,19 @@ def run(*args):
     return subprocess.run(args, check=True, capture_output=True, text=True).stdout
 
 
+def container_for_store(listing, store):
+    """Match the attached raw disk or its physical-store partition, never another disk."""
+    identifiers = re.compile(re.escape(store) + r'(?:s\d+)*\Z')
+    found = []
+    for entry in listing.get('Containers', []):
+        if any(identifiers.fullmatch(item.get('DeviceIdentifier', ''))
+               for item in entry.get('PhysicalStores', [])):
+            found.append(entry['ContainerReference'])
+    if len(found) > 1:
+        raise ValueError(f'Multiple APFS containers belong to {store}: {found}')
+    return found[0] if found else None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     size = parser.add_mutually_exclusive_group(required=True)
@@ -106,13 +120,20 @@ def main():
         attached = run('hdiutil', 'attach', '-imagekey', 'diskimage-class=CRawDiskImage', '-nomount', '-nobrowse', str(raw))
         store = re.match(r'(/dev/disk\d+)', attached).group(1).split('/')[-1]
         try:
-            listing = plistlib.loads(subprocess.check_output(['diskutil', 'apfs', 'list', '-plist']))
             container = None
-            for entry in listing['Containers']:
-                if any(s['DeviceIdentifier'] == store for s in entry.get('PhysicalStores', [])):
-                    container = entry['ContainerReference']
+            # Disk Arbitration may publish the APFS container after hdiutil has
+            # returned. Its physical store can also be a slice of the raw disk.
+            for attempt in range(15):
+                listing = plistlib.loads(subprocess.check_output(['diskutil', 'apfs', 'list', '-plist']))
+                container = container_for_store(listing, store)
+                if container:
+                    break
+                if attempt < 14:
+                    time.sleep(2)
             if not container:
-                sys.exit('No APFS container found on the attached seed')
+                print('hdiutil attachment: ' + attached, file=sys.stderr)
+                print('APFS listing: ' + json.dumps(listing, default=str), file=sys.stderr)
+                sys.exit('No APFS container found on the attached seed ' + store)
             run('diskutil', 'apfs', 'resizeContainer', container, '0')
         finally:
             subprocess.run(['hdiutil', 'detach', store, '-force'], capture_output=True)
