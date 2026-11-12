@@ -117,6 +117,14 @@ remove = [ ... ]
 
 [构建与启动](/zh/building)、[设备仓库](/zh/porting/device-repository)
 
+## APFS seed 扩容
+
+`seed-data-grow.py` 将 APFS 容器的物理存储与 `hdiutil attach` 返回的全部整盘匹配。
+合成容器可能先于底层磁盘出现。脚本拒绝多义匹配，并等待 Disk Arbitration 发布
+此次挂载的容器后再扩容。`scripts/check-apfs-seed-grow.py` 检查倒序设备输出和
+存储切片匹配，再于 macOS 上对原 UUID、固定 UUID 的临时 APFS 镜像进行扩容。
+这些检查不能替代正式 Data seed 制作和设备启动验证。
+
 ## iOS 27 运行输入
 
 `payload.runtime` 在编译内核前准备运行输入。Apple 静态、System 和 App 信任模块从所选

@@ -137,6 +137,16 @@ Booting the artifacts is a separate step with its own record.
 
 [Build and boot](/building), [Device repository](/porting/device-repository)
 
+## APFS seed growth
+
+`seed-data-grow.py` matches an APFS container's physical store against every
+whole disk reported by `hdiutil attach`. The synthesized container can appear
+before its backing disk. The script rejects ambiguous matches and polls for
+Disk Arbitration to publish the attached container before resizing it.
+`scripts/check-apfs-seed-grow.py` checks reversed attachment order and store
+slices, then grows disposable APFS images with original and fixed volume UUIDs
+on macOS. These checks do not replace a production Data seed or a device boot.
+
 ## Runtime inputs for iOS 27
 
 The payload's `runtime` table enables preparation before kernel compilation.
