@@ -13,7 +13,36 @@ sys.path.insert(0, str(ROOT / 'drivers/DarwinBoot/Test'))
 import packed_ramdisk
 
 
+def check_attachment_selection():
+    spec = importlib.util.spec_from_file_location('grow_seed', ROOT / 'scripts/seed-data-grow.py')
+    grow = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(grow)
+    # Production failure: disk10 (synthesized) appeared before disk9 (physical).
+    listing = {'Containers': [
+        {'ContainerReference': 'disk2', 'PhysicalStores': [{'DeviceIdentifier': 'disk0s2'}]},
+        {'ContainerReference': 'disk10', 'PhysicalStores': [{'DeviceIdentifier': 'disk9'}]},
+    ]}
+    for attachment in ('/dev/disk10\tAPFS\n/dev/disk10s1\tVolume\n/dev/disk9\t\n',
+                       '/dev/disk9\t\n/dev/disk10\tAPFS\n'):
+        assert grow.container_for_attachment(listing, attachment) == ('disk10', 'disk9')
+    for physical in ('disk9s1', 'disk9s1s2'):
+        sliced = {'Containers': [{'ContainerReference': 'disk10',
+                                  'PhysicalStores': [{'DeviceIdentifier': physical}]}]}
+        assert grow.container_for_attachment(sliced, '/dev/disk9\t\n') == ('disk10', 'disk9')
+    assert grow.container_for_attachment(listing, '/dev/disk90\t\n') == (None, 'disk90')
+    ambiguous = {'Containers': listing['Containers'] + [
+        {'ContainerReference': 'disk11', 'PhysicalStores': [{'DeviceIdentifier': 'disk10s2'}]}]}
+    try:
+        grow.container_for_attachment(ambiguous, '/dev/disk9\t\n/dev/disk10\t\n')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('Ambiguous attached containers must be rejected')
+    print('APFS attachment selection checks passed', flush=True)
+
+
 def main():
+    check_attachment_selection()
     build = ROOT / 'build'
     build.mkdir(exist_ok=True)
     spec = importlib.util.spec_from_file_location('make_seed', ROOT / 'scripts/make-macos-data-seed.py')

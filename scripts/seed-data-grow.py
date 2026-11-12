@@ -87,6 +87,21 @@ def container_for_store(listing, store):
     return found[0] if found else None
 
 
+def container_for_attachment(listing, attached):
+    """hdiutil may print the synthesized container before its physical store."""
+    stores = list(dict.fromkeys(re.findall(r'^/dev/(disk\d+)\s', attached, re.M)))
+    if not stores:
+        raise ValueError('hdiutil returned no whole-disk attachment')
+    matches = {}
+    for store in stores:
+        container = container_for_store(listing, store)
+        if container:
+            matches[container] = store
+    if len(matches) > 1:
+        raise ValueError('Multiple APFS containers belong to the attached image: ' + str(matches))
+    return next(((container, store) for container, store in matches.items()), (None, stores[0]))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     size = parser.add_mutually_exclusive_group(required=True)
@@ -118,14 +133,14 @@ def main():
                 handle.seek(offset)
                 handle.write(data)
         attached = run('hdiutil', 'attach', '-imagekey', 'diskimage-class=CRawDiskImage', '-nomount', '-nobrowse', str(raw))
-        store = re.match(r'(/dev/disk\d+)', attached).group(1).split('/')[-1]
+        _, store = container_for_attachment({}, attached)
         try:
             container = None
             # Disk Arbitration may publish the APFS container after hdiutil has
             # returned. Its physical store can also be a slice of the raw disk.
             for attempt in range(15):
                 listing = plistlib.loads(subprocess.check_output(['diskutil', 'apfs', 'list', '-plist']))
-                container = container_for_store(listing, store)
+                container, store = container_for_attachment(listing, attached)
                 if container:
                     break
                 if attempt < 14:
